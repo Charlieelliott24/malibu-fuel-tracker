@@ -1,0 +1,9 @@
+{
+  "name": "Malibu Fuel Tracker",
+  "short_name": "Fuel Tracker",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#eef3f4",
+  "theme_color": "#10202a",
+  "icons": []
+}
