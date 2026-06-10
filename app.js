@@ -3,6 +3,9 @@ const SETTINGS_KEY = "malibuFuelTracker:settings";
 const FORMULA_OFFSET = 114.610;
 const FORMULA_SLOPE = 0.40945;
 const DEFAULT_TANK_GALLONS = 48;
+const DEFAULT_FUEL_PRICE_PER_LITRE = 2.0;
+const DEFAULT_JERRY_LITRES = 20;
+const LITRES_PER_GALLON = 3.78541;
 const SMOOTHING_WINDOW = 3;
 const GAUGE_STEPS = [0, 13, 25, 37, 50, 62, 75, 87, 100];
 
@@ -17,6 +20,17 @@ const elements = {
   gaugeStep: document.querySelector("#gaugeStep"),
   sinceLast: document.querySelector("#sinceLast"),
   tankSize: document.querySelector("#tankSize"),
+  fuelPrice: document.querySelector("#fuelPrice"),
+  jerrySize: document.querySelector("#jerrySize"),
+  fillCost: document.querySelector("#fillCost"),
+  fillLitres: document.querySelector("#fillLitres"),
+  jerriesNeeded: document.querySelector("#jerriesNeeded"),
+  jerryCost: document.querySelector("#jerryCost"),
+  sessionCost: document.querySelector("#sessionCost"),
+  sessionUsed: document.querySelector("#sessionUsed"),
+  setSessionStart: document.querySelector("#setSessionStart"),
+  clearSessionStart: document.querySelector("#clearSessionStart"),
+  sessionStartLabel: document.querySelector("#sessionStartLabel"),
   historyBody: document.querySelector("#historyBody"),
   entryCount: document.querySelector("#entryCount"),
   emptyState: document.querySelector("#emptyState"),
@@ -34,6 +48,8 @@ let settings = loadSettings();
 let deferredInstallPrompt = null;
 
 elements.tankSize.value = settings.tankGallons;
+elements.fuelPrice.value = settings.fuelPricePerLitre;
+elements.jerrySize.value = settings.jerryLitres;
 
 elements.form.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -82,6 +98,24 @@ elements.tankSize.addEventListener("change", () => {
   }
 });
 
+elements.fuelPrice.addEventListener("input", () => {
+  const value = Number(elements.fuelPrice.value);
+  if (Number.isFinite(value) && value >= 0) {
+    settings.fuelPricePerLitre = value;
+    saveSettings();
+    render();
+  }
+});
+
+elements.jerrySize.addEventListener("input", () => {
+  const value = Number(elements.jerrySize.value);
+  if (Number.isFinite(value) && value > 0) {
+    settings.jerryLitres = value;
+    saveSettings();
+    render();
+  }
+});
+
 elements.historyBody.addEventListener("click", (event) => {
   const button = event.target.closest("[data-delete]");
   if (!button) return;
@@ -90,9 +124,40 @@ elements.historyBody.addEventListener("click", (event) => {
   render();
 });
 
+elements.setSessionStart.addEventListener("click", () => {
+  const latest = entries[0];
+  if (!latest) return;
+  const percent = smoothedPercentForIndex(0);
+  settings.sessionStart = {
+    createdAt: new Date().toISOString(),
+    entryCreatedAt: latest.createdAt,
+    percent,
+    gallons: gallonsForPercent(percent),
+    raw: formatRaw(latest),
+  };
+  saveSettings();
+  render();
+});
+
+elements.clearSessionStart.addEventListener("click", () => {
+  settings.sessionStart = null;
+  saveSettings();
+  render();
+});
+
 elements.exportCsv.addEventListener("click", () => {
   const rows = [
-    ["time", "raw_input", "raw_average", "estimate_percent", "smoothed_percent", "gallons_remaining", "gauge_percent"],
+    [
+      "time",
+      "raw_input",
+      "raw_average",
+      "estimate_percent",
+      "smoothed_percent",
+      "gallons_remaining",
+      "litres_remaining",
+      "fill_cost",
+      "gauge_percent",
+    ],
     ...entries.map((entry, index) => [
       entry.createdAt,
       entry.rawInput,
@@ -100,6 +165,8 @@ elements.exportCsv.addEventListener("click", () => {
       entry.percent,
       smoothedPercentForIndex(index),
       gallonsForPercent(smoothedPercentForIndex(index)),
+      litresForGallons(gallonsForPercent(smoothedPercentForIndex(index))),
+      fillCostForPercent(smoothedPercentForIndex(index)),
       entry.gaugePercent ?? "",
     ]),
   ];
@@ -126,6 +193,8 @@ elements.importJson.addEventListener("change", async (event) => {
     saveEntries();
     saveSettings();
     elements.tankSize.value = settings.tankGallons;
+    elements.fuelPrice.value = settings.fuelPricePerLitre;
+    elements.jerrySize.value = settings.jerryLitres;
     render();
   } catch {
     alert("That backup file could not be imported.");
@@ -138,7 +207,7 @@ elements.copySummary.addEventListener("click", async () => {
   const latest = entries[0];
   if (!latest) return;
   const smooth = smoothedPercentForIndex(0);
-  const summary = `Malibu fuel estimate: ${formatPercent(smooth)} (${formatGallons(gallonsForPercent(smooth))} remaining). Raw ${formatRaw(latest)} entered ${formatDate(latest.createdAt)}.`;
+  const summary = `Malibu fuel estimate: ${formatPercent(smooth)} (${formatGallons(gallonsForPercent(smooth))} remaining). Fill-up estimate ${formatMoney(fillCostForPercent(smooth))}. Raw ${formatRaw(latest)} entered ${formatDate(latest.createdAt)}.`;
   await copyText(summary);
   elements.copySummary.textContent = "Copied";
   window.setTimeout(() => {
@@ -233,6 +302,7 @@ function render() {
     elements.gaugeStep.textContent = "--";
     elements.sinceLast.textContent = "--";
     elements.copySummary.disabled = true;
+    elements.setSessionStart.disabled = true;
   } else {
     const smooth = smoothedPercentForIndex(0);
     elements.fuelFill.style.width = `${smooth}%`;
@@ -242,11 +312,52 @@ function render() {
     elements.gaugeStep.textContent = `${nearestGaugeStep(smooth)}%`;
     elements.sinceLast.textContent = formatSince(latest.createdAt);
     elements.copySummary.disabled = false;
+    elements.setSessionStart.disabled = false;
   }
 
   elements.entryCount.textContent = `${entries.length} ${entries.length === 1 ? "entry" : "entries"}`;
+  renderMoney(latest);
   renderHistory();
   renderChart();
+}
+
+function renderMoney(latest) {
+  if (!latest) {
+    elements.fillCost.textContent = "--";
+    elements.fillLitres.textContent = "Enter a reading first";
+    elements.jerriesNeeded.textContent = "--";
+    elements.jerryCost.textContent = "Based on saved jerry size";
+    elements.sessionCost.textContent = "--";
+    elements.sessionUsed.textContent = "Set a start point";
+    elements.sessionStartLabel.textContent = settings.sessionStart ? "Waiting for a reading" : "No session start saved";
+    elements.clearSessionStart.disabled = !settings.sessionStart;
+    return;
+  }
+
+  const smooth = smoothedPercentForIndex(0);
+  const remainingGallons = gallonsForPercent(smooth);
+  const fillGallons = Math.max(0, settings.tankGallons - remainingGallons);
+  const fillLitres = litresForGallons(fillGallons);
+  const jerries = settings.jerryLitres > 0 ? fillLitres / settings.jerryLitres : 0;
+
+  elements.fillCost.textContent = formatMoney(fillLitres * settings.fuelPricePerLitre);
+  elements.fillLitres.textContent = `${formatLitres(fillLitres)} to full`;
+  elements.jerriesNeeded.textContent = jerries ? jerries.toFixed(1) : "0.0";
+  elements.jerryCost.textContent = `${formatMoney(settings.jerryLitres * settings.fuelPricePerLitre)} per jerry`;
+  elements.clearSessionStart.disabled = !settings.sessionStart;
+
+  if (!settings.sessionStart) {
+    elements.sessionCost.textContent = "--";
+    elements.sessionUsed.textContent = "Set a start point";
+    elements.sessionStartLabel.textContent = "No session start saved";
+    return;
+  }
+
+  const usedGallons = Math.max(0, settings.sessionStart.gallons - remainingGallons);
+  const usedLitres = litresForGallons(usedGallons);
+  elements.sessionCost.textContent = formatMoney(usedLitres * settings.fuelPricePerLitre);
+  elements.sessionUsed.textContent = `${formatLitres(usedLitres)} since start`;
+  elements.sessionStartLabel.textContent = `Started ${formatDate(settings.sessionStart.createdAt)} at ${formatPercent(settings.sessionStart.percent)}`;
 }
 
 function renderHistory() {
@@ -268,7 +379,7 @@ function renderHistory() {
       <td><span class="raw-value"></span><span class="row-note"></span></td>
       <td>${formatPercent(entry.percent)}<span class="row-note">${formatRange(entry)}</span></td>
       <td>${formatPercent(smooth)}<span class="row-note">${formatGallons(gallonsForPercent(smooth))}</span></td>
-      <td>${formatDelta(delta)}</td>
+      <td>${formatDelta(delta)}<span class="row-note">${formatDeltaCost(delta)}</span></td>
       <td><button class="delete-row" type="button" data-delete="${escapeAttribute(entry.id)}" title="Delete entry">Delete</button></td>
     `;
     row.children[1].querySelector(".raw-value").textContent = formatRaw(entry);
@@ -307,10 +418,18 @@ function loadSettings() {
   try {
     return {
       tankGallons: DEFAULT_TANK_GALLONS,
+      fuelPricePerLitre: DEFAULT_FUEL_PRICE_PER_LITRE,
+      jerryLitres: DEFAULT_JERRY_LITRES,
+      sessionStart: null,
       ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}"),
     };
   } catch {
-    return { tankGallons: DEFAULT_TANK_GALLONS };
+    return {
+      tankGallons: DEFAULT_TANK_GALLONS,
+      fuelPricePerLitre: DEFAULT_FUEL_PRICE_PER_LITRE,
+      jerryLitres: DEFAULT_JERRY_LITRES,
+      sessionStart: null,
+    };
   }
 }
 
@@ -335,6 +454,16 @@ function gallonsForPercent(percent) {
   return (settings.tankGallons * percent) / 100;
 }
 
+function litresForGallons(gallons) {
+  return gallons * LITRES_PER_GALLON;
+}
+
+function fillCostForPercent(percent) {
+  const remainingGallons = gallonsForPercent(percent);
+  const fillGallons = Math.max(0, settings.tankGallons - remainingGallons);
+  return litresForGallons(fillGallons) * settings.fuelPricePerLitre;
+}
+
 function nearestGaugeStep(percent) {
   return GAUGE_STEPS.reduce((best, step) => {
     return Math.abs(step - percent) < Math.abs(best - percent) ? step : best;
@@ -347,6 +476,18 @@ function formatPercent(value) {
 
 function formatGallons(value) {
   return `${value.toFixed(1)} gal`;
+}
+
+function formatLitres(value) {
+  return `${value.toFixed(1)} L`;
+}
+
+function formatMoney(value) {
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: "CAD",
+    maximumFractionDigits: 2,
+  }).format(value);
 }
 
 function formatRaw(entry) {
@@ -362,6 +503,13 @@ function formatDelta(delta) {
   if (delta === null) return "First entry";
   const sign = delta > 0 ? "+" : "";
   return `${sign}${delta.toFixed(1)}%`;
+}
+
+function formatDeltaCost(delta) {
+  if (delta === null || delta >= 0) return "";
+  const gallonsUsed = settings.tankGallons * Math.abs(delta / 100);
+  const cost = litresForGallons(gallonsUsed) * settings.fuelPricePerLitre;
+  return `${formatMoney(cost)} used`;
 }
 
 function formatDate(isoDate) {

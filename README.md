@@ -16,6 +16,9 @@ The app caps results between 0% and 100%. If the raw value bounces between two n
 - Timestamped history saved in the browser
 - Smoothed estimate using the latest 3 entries
 - Gallons remaining estimate with editable tank size
+- Fill-up cost estimate from a saved premium price
+- Session fuel-used cost from a saved start reading
+- Jerry can estimate with editable litre size
 - CSV export
 - JSON backup and import
 - Copyable summary for sharing with family
@@ -36,3 +39,7 @@ After pushing the repo to GitHub:
 5. Save.
 
 GitHub will give you a public URL you can share.
+
+## Gas Prices
+
+The app keeps the premium price editable instead of fetching it automatically. Google Maps and Waze may show current station prices, but they do not provide a simple public no-key fuel price feed for this static app. Update the saved `$/L` value when you buy premium, and the fill-up and session cost estimates recalculate immediately.

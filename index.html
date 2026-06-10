@@ -79,6 +79,55 @@
         </div>
       </section>
 
+      <section class="money-section" aria-label="Fuel cost calculator">
+        <div class="section-heading">
+          <h2>Fuel Money</h2>
+          <a class="price-link" href="https://maps.app.goo.gl/uBWcVmYExV1QmRen9" target="_blank" rel="noreferrer">Check premium</a>
+        </div>
+
+        <div class="money-inputs">
+          <label for="fuelPrice">
+            Premium price
+            <span class="money-control">
+              <span>$</span>
+              <input id="fuelPrice" type="number" min="0" step="0.001" inputmode="decimal">
+              <span>/L</span>
+            </span>
+          </label>
+          <label for="jerrySize">
+            Jerry size
+            <span class="money-control">
+              <input id="jerrySize" type="number" min="1" step="0.5" inputmode="decimal">
+              <span>L</span>
+            </span>
+          </label>
+        </div>
+
+        <div class="money-grid">
+          <article>
+            <span>To fill up</span>
+            <strong id="fillCost">--</strong>
+            <small id="fillLitres">Enter a reading first</small>
+          </article>
+          <article>
+            <span>Jerries needed</span>
+            <strong id="jerriesNeeded">--</strong>
+            <small id="jerryCost">Based on saved jerry size</small>
+          </article>
+          <article>
+            <span>Session used</span>
+            <strong id="sessionCost">--</strong>
+            <small id="sessionUsed">Set a start point</small>
+          </article>
+        </div>
+
+        <div class="session-actions">
+          <button id="setSessionStart" type="button">Set Session Start</button>
+          <button class="secondary" id="clearSessionStart" type="button">Clear Session</button>
+          <span id="sessionStartLabel">No session start saved</span>
+        </div>
+      </section>
+
       <section class="history-section">
         <div class="section-heading">
           <h2>History</h2>
