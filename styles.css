@@ -354,6 +354,28 @@ h2 {
   margin-top: 14px;
 }
 
+.sync-row {
+  align-items: center;
+  border-top: 1px solid #e2e9ea;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: space-between;
+  margin-top: 16px;
+  padding-top: 14px;
+}
+
+.sync-row span {
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.compact {
+  min-height: 34px;
+  padding: 0 12px;
+}
+
 .secondary {
   background: #ffffff;
   border: 1px solid #cbd7da;
@@ -531,7 +553,8 @@ td {
   }
 
   .actions button,
-  .file-button {
+  .file-button,
+  .sync-row button {
     flex: 1 1 130px;
     justify-content: center;
   }

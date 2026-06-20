@@ -22,24 +22,30 @@ The app caps results between 0% and 100%. If the raw value bounces between two n
 - CSV export
 - JSON backup and import
 - Copyable summary for sharing with family
-- Static app that works on GitHub Pages
+- Static frontend with a small Netlify function for cross-device sync
+- Cloud sync for family devices through a shared GitHub-backed log file
 
 ## Use Locally
 
 Open `index.html` in a browser.
 
-## Publish With GitHub Pages
+## Publish With Netlify
 
-After pushing the repo to GitHub:
+GitHub Pages can host the static app, but it cannot save shared data. To sync the history across devices, deploy this repo on Netlify so the `/api/fuel-log` function can write to `data/fuel-log.json`.
 
-1. Open the repo on GitHub.
-2. Go to **Settings > Pages**.
-3. Set the source to **Deploy from a branch**.
-4. Choose the `main` branch and `/root`.
-5. Save.
+1. Create a GitHub fine-grained personal access token with **Contents: Read and write** for this repo.
+2. In Netlify, import this GitHub repo as a new site.
+3. Add environment variables:
+   - `GITHUB_TOKEN`: the token from step 1
+   - `GITHUB_REPO`: `Charlieelliott24/malibu-fuel-tracker`
+4. Deploy the site.
 
-GitHub will give you a public URL you can share.
+Family can use the Netlify URL without logging in. The app keeps a local cache, then syncs entries to the shared GitHub-backed log.
 
 ## Gas Prices
 
 The app keeps the premium price editable instead of fetching it automatically. Google Maps and Waze may show current station prices, but they do not provide a simple public no-key fuel price feed for this static app. Update the saved `$/L` value when you buy premium, and the fill-up and session cost estimates recalculate immediately.
+
+## Cloud Sync
+
+Entries sync through `/api/fuel-log`, a Netlify function that stores the shared history in `data/fuel-log.json`. The GitHub token stays server-side in Netlify and is not exposed to browsers.

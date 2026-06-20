@@ -1,0 +1,10 @@
+[build]
+  publish = "."
+
+[functions]
+  directory = "netlify/functions"
+
+[[redirects]]
+  from = "/api/fuel-log"
+  to = "/.netlify/functions/fuel-log"
+  status = 200

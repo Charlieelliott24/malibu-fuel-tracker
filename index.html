@@ -77,6 +77,10 @@
           <input id="importJson" type="file" accept="application/json,.json">
           <button class="danger" id="clearHistory" type="button">Clear</button>
         </div>
+        <div class="sync-row" aria-live="polite">
+          <span id="syncStatus">Cloud sync starting...</span>
+          <button class="secondary compact" id="syncNow" type="button">Sync Now</button>
+        </div>
       </section>
 
       <section class="money-section" aria-label="Fuel cost calculator">

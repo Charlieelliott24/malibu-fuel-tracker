@@ -1,5 +1,6 @@
 const STORAGE_KEY = "malibuFuelTracker:v1";
 const SETTINGS_KEY = "malibuFuelTracker:settings";
+const CLOUD_SYNC_URL = "/api/fuel-log";
 const FORMULA_OFFSET = 114.610;
 const FORMULA_SLOPE = 0.40945;
 const DEFAULT_TANK_GALLONS = 48;
@@ -7,6 +8,8 @@ const DEFAULT_FUEL_PRICE_PER_LITRE = 2.0;
 const DEFAULT_JERRY_LITRES = 20;
 const LITRES_PER_GALLON = 3.78541;
 const SMOOTHING_WINDOW = 3;
+const CLOUD_SYNC_INTERVAL_MS = 30000;
+const CLOUD_SAVE_DEBOUNCE_MS = 700;
 const GAUGE_STEPS = [0, 13, 25, 37, 50, 62, 75, 87, 100];
 
 const elements = {
@@ -40,12 +43,17 @@ const elements = {
   importJson: document.querySelector("#importJson"),
   copySummary: document.querySelector("#copySummary"),
   clearHistory: document.querySelector("#clearHistory"),
+  syncStatus: document.querySelector("#syncStatus"),
+  syncNow: document.querySelector("#syncNow"),
   installButton: document.querySelector("#installButton"),
 };
 
 let entries = loadEntries();
 let settings = loadSettings();
 let deferredInstallPrompt = null;
+let cloudSaveTimer = null;
+let isCloudSyncing = false;
+let lastCloudSyncAt = null;
 
 elements.tankSize.value = settings.tankGallons;
 elements.fuelPrice.value = settings.fuelPricePerLitre;
@@ -75,6 +83,7 @@ elements.form.addEventListener("submit", (event) => {
   });
 
   saveEntries();
+  queueCloudSave();
   elements.input.value = "";
   elements.parseHint.textContent = parsed.message;
   elements.parseHint.classList.remove("error");
@@ -94,6 +103,7 @@ elements.tankSize.addEventListener("change", () => {
   if (Number.isFinite(value) && value > 0) {
     settings.tankGallons = value;
     saveSettings();
+    queueCloudSave();
     render();
   }
 });
@@ -103,6 +113,7 @@ elements.fuelPrice.addEventListener("input", () => {
   if (Number.isFinite(value) && value >= 0) {
     settings.fuelPricePerLitre = value;
     saveSettings();
+    queueCloudSave();
     render();
   }
 });
@@ -112,6 +123,7 @@ elements.jerrySize.addEventListener("input", () => {
   if (Number.isFinite(value) && value > 0) {
     settings.jerryLitres = value;
     saveSettings();
+    queueCloudSave();
     render();
   }
 });
@@ -121,6 +133,7 @@ elements.historyBody.addEventListener("click", (event) => {
   if (!button) return;
   entries = entries.filter((entry) => entry.id !== button.dataset.delete);
   saveEntries();
+  queueCloudSave();
   render();
 });
 
@@ -136,12 +149,14 @@ elements.setSessionStart.addEventListener("click", () => {
     raw: formatRaw(latest),
   };
   saveSettings();
+  queueCloudSave();
   render();
 });
 
 elements.clearSessionStart.addEventListener("click", () => {
   settings.sessionStart = null;
   saveSettings();
+  queueCloudSave();
   render();
 });
 
@@ -192,6 +207,7 @@ elements.importJson.addEventListener("change", async (event) => {
     settings = { ...settings, ...(backup.settings || {}) };
     saveEntries();
     saveSettings();
+    queueCloudSave();
     elements.tankSize.value = settings.tankGallons;
     elements.fuelPrice.value = settings.fuelPricePerLitre;
     elements.jerrySize.value = settings.jerryLitres;
@@ -217,11 +233,16 @@ elements.copySummary.addEventListener("click", async () => {
 
 elements.clearHistory.addEventListener("click", () => {
   if (!entries.length) return;
-  if (confirm("Clear all saved fuel entries on this device?")) {
+  if (confirm("Clear all saved fuel entries for everyone?")) {
     entries = [];
     saveEntries();
+    queueCloudSave();
     render();
   }
+});
+
+elements.syncNow.addEventListener("click", () => {
+  syncFromCloud({ pushAfterMerge: true });
 });
 
 window.addEventListener("beforeinstallprompt", (event) => {
@@ -239,6 +260,7 @@ elements.installButton.addEventListener("click", async () => {
 });
 
 render();
+initCloudSync();
 
 function parseReading(input) {
   const text = input.trim();
@@ -441,6 +463,158 @@ function saveSettings() {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
 }
 
+function initCloudSync() {
+  setSyncStatus("Syncing cloud history...");
+  syncFromCloud({ pushAfterMerge: true });
+  window.setInterval(() => syncFromCloud(), CLOUD_SYNC_INTERVAL_MS);
+}
+
+async function syncFromCloud(options = {}) {
+  if (isCloudSyncing) return;
+  isCloudSyncing = true;
+  elements.syncNow.disabled = true;
+
+  try {
+    const cloudState = await fetchCloudState();
+    const merge = mergeCloudState(cloudState);
+
+    if (merge.localChanged) {
+      saveEntries();
+      saveSettings();
+      applySettingsToInputs();
+      render();
+    }
+
+    if (merge.cloudChanged || options.pushAfterMerge) {
+      await pushCloudState();
+    }
+
+    lastCloudSyncAt = new Date();
+    setSyncStatus(`Cloud synced ${formatTime(lastCloudSyncAt)}`);
+  } catch (error) {
+    setSyncStatus("Cloud sync unavailable. Entries saved on this device.");
+  } finally {
+    isCloudSyncing = false;
+    elements.syncNow.disabled = false;
+  }
+}
+
+function queueCloudSave() {
+  setSyncStatus("Cloud sync pending...");
+  window.clearTimeout(cloudSaveTimer);
+  cloudSaveTimer = window.setTimeout(async () => {
+    try {
+      await pushCloudState();
+      lastCloudSyncAt = new Date();
+      setSyncStatus(`Cloud synced ${formatTime(lastCloudSyncAt)}`);
+    } catch {
+      setSyncStatus("Cloud sync failed. Will retry automatically.");
+    }
+  }, CLOUD_SAVE_DEBOUNCE_MS);
+}
+
+async function fetchCloudState() {
+  return cloudRequest("GET", `${CLOUD_SYNC_URL}?cacheBust=${Date.now()}`);
+}
+
+async function pushCloudState() {
+  await cloudRequest("PUT", CLOUD_SYNC_URL, buildCloudState());
+}
+
+function cloudRequest(method, url, body) {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open(method, url, true);
+    request.setRequestHeader("Accept", "application/json");
+    if (body) request.setRequestHeader("Content-Type", "application/json");
+
+    request.onload = () => {
+      if (request.status < 200 || request.status >= 300) {
+        reject(new Error(`Cloud request failed: ${request.status}`));
+        return;
+      }
+
+      try {
+        resolve(request.responseText ? JSON.parse(request.responseText) : null);
+      } catch {
+        reject(new Error("Cloud response was not valid JSON"));
+      }
+    };
+
+    request.onerror = () => reject(new Error("Cloud request failed"));
+    request.send(body ? JSON.stringify(body) : null);
+  });
+}
+
+function buildCloudState() {
+  return {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    entries,
+    settings: cloudSettings(settings),
+  };
+}
+
+function mergeCloudState(cloudState) {
+  const cloudEntries = Array.isArray(cloudState.entries) ? cloudState.entries.filter(isValidEntry) : [];
+  const mergedEntries = mergeEntries(entries, cloudEntries);
+  const mergedSettings = {
+    ...settings,
+    ...normalizeCloudSettings(cloudState.settings),
+  };
+
+  const localChanged = JSON.stringify(entries) !== JSON.stringify(mergedEntries) || JSON.stringify(settings) !== JSON.stringify(mergedSettings);
+  const cloudChanged =
+    JSON.stringify(cloudEntries) !== JSON.stringify(mergedEntries) ||
+    JSON.stringify(normalizeCloudSettings(cloudState.settings)) !== JSON.stringify(cloudSettings(mergedSettings));
+
+  entries = mergedEntries;
+  settings = mergedSettings;
+
+  return { localChanged, cloudChanged };
+}
+
+function mergeEntries(localEntries, cloudEntries) {
+  const byId = new Map();
+  [...cloudEntries, ...localEntries].forEach((entry) => {
+    byId.set(entry.id, entry);
+  });
+
+  return [...byId.values()].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+function cloudSettings(source) {
+  return {
+    tankGallons: source.tankGallons,
+    fuelPricePerLitre: source.fuelPricePerLitre,
+    jerryLitres: source.jerryLitres,
+    sessionStart: source.sessionStart || null,
+  };
+}
+
+function normalizeCloudSettings(cloudSettingsValue) {
+  const incoming = cloudSettingsValue && typeof cloudSettingsValue === "object" ? cloudSettingsValue : {};
+  return {
+    tankGallons: Number.isFinite(Number(incoming.tankGallons)) && Number(incoming.tankGallons) > 0 ? Number(incoming.tankGallons) : settings.tankGallons,
+    fuelPricePerLitre:
+      Number.isFinite(Number(incoming.fuelPricePerLitre)) && Number(incoming.fuelPricePerLitre) >= 0
+        ? Number(incoming.fuelPricePerLitre)
+        : settings.fuelPricePerLitre,
+    jerryLitres: Number.isFinite(Number(incoming.jerryLitres)) && Number(incoming.jerryLitres) > 0 ? Number(incoming.jerryLitres) : settings.jerryLitres,
+    sessionStart: incoming.sessionStart || settings.sessionStart || null,
+  };
+}
+
+function applySettingsToInputs() {
+  elements.tankSize.value = settings.tankGallons;
+  elements.fuelPrice.value = settings.fuelPricePerLitre;
+  elements.jerrySize.value = settings.jerryLitres;
+}
+
+function setSyncStatus(message) {
+  elements.syncStatus.textContent = message;
+}
+
 function isValidEntry(entry) {
   return entry && typeof entry.id === "string" && Number.isFinite(entry.rawAverage) && Number.isFinite(entry.percent);
 }
@@ -519,6 +693,13 @@ function formatDate(isoDate) {
     hour: "numeric",
     minute: "2-digit",
   }).format(new Date(isoDate));
+}
+
+function formatTime(date) {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
 }
 
 function formatSince(isoDate) {
